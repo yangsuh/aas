@@ -22,6 +22,8 @@ import org.apache.commons.math3.random.MersenneTwister
 import org.apache.commons.math3.stat.correlation.Covariance
 import org.apache.commons.math3.stat.regression.OLSMultipleLinearRegression
 
+import scala.util.Try
+
 
 object RunRisk {
   def main(args: Array[String]): Unit = {
@@ -53,21 +55,23 @@ object RunRisk {
   }
 }
 
-class RunRisk(private val spark: SparkSession) {
+class RunRisk(private val spark: SparkSession) extends Serializable {
   import spark.implicits._
 
   /**
-   * Reads a history in the Google format
-   */
-  def readGoogleHistory(file: File): Array[(LocalDate, Double)] = {
-    val formatter = DateTimeFormatter.ofPattern("d-MMM-yy")
+    * Reads a history in the Yahoo format
+    */
+  def readYahooHistory(file: File): Array[(LocalDate, Double)] = {
+    val formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd")
     val lines = scala.io.Source.fromFile(file).getLines().toSeq
-    lines.tail.map { line =>
-      val cols = line.split(',')
-      val date = LocalDate.parse(cols(0), formatter)
-      val value = cols(4).toDouble
-      (date, value)
-    }.reverse.toArray
+    lines.tail.flatMap { line =>
+      Try {
+        val cols = line.split(',')
+        val date = LocalDate.parse(cols(0), formatter)
+        val value = cols(4).toDouble
+        (date, value)
+      }.toOption
+    }.toArray
   }
 
   def trimToRegion(history: Array[(LocalDate, Double)], start: LocalDate, end: LocalDate)
@@ -125,7 +129,7 @@ class RunRisk(private val spark: SparkSession) {
     val files = stocksDir.listFiles()
     val allStocks = files.iterator.flatMap { file =>
       try {
-        Some(readGoogleHistory(file))
+        Some(readYahooHistory(file))
       } catch {
         case e: Exception => None
       }
@@ -133,9 +137,9 @@ class RunRisk(private val spark: SparkSession) {
     val rawStocks = allStocks.filter(_.size >= 260 * 5 + 10)
 
     val factorsPrefix = "factors/"
-    val rawFactors = Array("NYSEARCA%3AGLD.csv", "NASDAQ%3ATLT.csv", "NYSEARCA%3ACRED.csv").
+    val rawFactors = Array("^GSPC.csv", "^IXIC.csv", "^TYX.csv", "^FVX.csv").
       map(x => new File(factorsPrefix + x)).
-      map(readGoogleHistory)
+      map(readYahooHistory)
 
     val stocks = rawStocks.map(trimToRegion(_, start, end)).map(fillInHistory(_, start, end))
 
